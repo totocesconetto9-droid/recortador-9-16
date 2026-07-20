@@ -149,9 +149,9 @@
     background: rgba(20,10,50,0.75); color: var(--ink); font-size: 9px;
     padding: 2px 6px; border-radius: 3px; letter-spacing: .04em;
   }
-  .crop-canvas-wrap.ai-extended{ cursor: pointer; border-color: var(--violet); }
-  .crop-canvas-wrap.ai-extended::after{
-    content: "✨ IA"; position: absolute; top: 4px; right: 4px;
+  .crop-canvas-wrap.fill-extended{ cursor: pointer; border-color: var(--violet); }
+  .crop-canvas-wrap.fill-extended::after{
+    content: "🪄 Relleno"; position: absolute; top: 4px; right: 4px;
     background: rgba(20,10,50,0.75); color: var(--ink); font-size: 9px;
     padding: 2px 6px; border-radius: 3px; letter-spacing: .04em;
   }
@@ -240,18 +240,12 @@
         <button class="secondary" id="renameAllBtn">Aplicar</button>
       </div>
     </div>
-    <div class="toolbar-row">
-      <div class="toolbar-btns" style="flex:1;">
-        <span class="toolbar-label">✨ Prompt IA (opcional)</span>
-        <input type="text" id="aiPromptInput" placeholder="ej: playa con palmeras, cielo despejado" style="flex:1; min-width:220px;">
-      </div>
-    </div>
   </div>
 
   <div class="grid" id="grid"></div>
 
   <div class="hint">
-    El recorte arranca centrado; arrastrá dentro del marco para reposicionar, o hacé <b>click</b> (sin arrastrar) para ver una vista previa grande antes de descargar. Si un recorte no llega a la resolución elegida, aparece <b>🔍 Mejorar calidad</b> debajo — reescalado de alta calidad + nitidez, todo con canvas, sin modelos externos. Si la foto no llena el marco 9:16/4:5 sin recortar contenido, aparece <b>✨ Extender con IA</b> — en vez de cortar la imagen, genera contenido nuevo en los bordes para completar el marco (usa IA generativa real vía Gemini). Una vez aplicado cualquiera de los dos, ese recorte queda fijo — "Revertir" / "Revertir IA" lo vuelve a dejar editable.
+    El recorte arranca centrado; arrastrá dentro del marco para reposicionar, o hacé <b>click</b> (sin arrastrar) para ver una vista previa grande antes de descargar. Si un recorte no llega a la resolución elegida, aparece <b>🔍 Mejorar calidad</b> debajo — reescalado de alta calidad + nitidez, todo con canvas, sin modelos externos. Si la foto no llena el marco 9:16/4:5 sin recortar contenido, aparece <b>🪄 Completar marco</b> — en vez de cortar la imagen, rellena los bordes con una versión difuminada y ampliada de la misma foto (como el fondo de las Stories), 100% con canvas, sin IA ni conexión a internet. Una vez aplicado cualquiera de los dos, ese recorte queda fijo — "Revertir" / "Revertir relleno" lo vuelve a dejar editable.
   </div>
 
 </div>
@@ -322,12 +316,12 @@ function computeCrop(w, h, targetRatio){
     cropW, cropH, slackX, slackY,
     offsetX: slackX / 2, offsetY: slackY / 2,
     enhanced: false, enhancedCanvas: null,
-    aiExtended: false, aiCanvas: null
+    filled: false, fillCanvas: null
   };
 }
 
 function getCropSourceCanvas(crop){
-  if (crop.aiExtended && crop.aiCanvas) return crop.aiCanvas;
+  if (crop.filled && crop.fillCanvas) return crop.fillCanvas;
   if (crop.enhanced && crop.enhancedCanvas) return crop.enhancedCanvas;
   return null;
 }
@@ -485,7 +479,7 @@ function renderGrid(){
 
       const wrap = document.createElement('div');
       wrap.className = 'crop-canvas-wrap'
-        + (crop.aiExtended ? ' ai-extended' : (crop.enhanced ? ' enhanced' : ''));
+        + (crop.filled ? ' fill-extended' : (crop.enhanced ? ' enhanced' : ''));
       const [pw, ph] = PREVIEW_SIZE[key];
       const canvas = document.createElement('canvas');
       canvas.width = pw; canvas.height = ph;
@@ -506,7 +500,7 @@ function renderGrid(){
       centerBtn.addEventListener('click', () => {
         const c = photo.crops[key];
         c.enhanced = false; c.enhancedCanvas = null;
-        c.aiExtended = false; c.aiCanvas = null;
+        c.filled = false; c.fillCanvas = null;
         c.offsetX = c.slackX / 2; c.offsetY = c.slackY / 2;
         renderGrid();
       });
@@ -521,25 +515,25 @@ function renderGrid(){
       actions.appendChild(centerBtn);
       actions.appendChild(dlBtn);
 
-      if (crop.aiExtended){
-        const revertAiBtn = document.createElement('button');
-        revertAiBtn.className = 'mini-btn ai-btn done';
-        revertAiBtn.textContent = '↺ Revertir IA';
-        revertAiBtn.addEventListener('click', () => {
-          crop.aiExtended = false; crop.aiCanvas = null;
+      if (crop.filled){
+        const revertFillBtn = document.createElement('button');
+        revertFillBtn.className = 'mini-btn ai-btn done';
+        revertFillBtn.textContent = '↺ Revertir relleno';
+        revertFillBtn.addEventListener('click', () => {
+          crop.filled = false; crop.fillCanvas = null;
           renderGrid();
         });
-        actions.appendChild(revertAiBtn);
+        actions.appendChild(revertFillBtn);
       } else {
-        const aiExtendBtn = document.createElement('button');
-        aiExtendBtn.className = 'mini-btn ai-btn';
-        aiExtendBtn.textContent = '✨ Extender con IA';
-        aiExtendBtn.addEventListener('click', () => extendCropWithAI(photo, key, aiExtendBtn));
-        actions.appendChild(aiExtendBtn);
+        const fillBtn = document.createElement('button');
+        fillBtn.className = 'mini-btn ai-btn';
+        fillBtn.textContent = '🪄 Completar marco';
+        fillBtn.addEventListener('click', () => fillCropFrame(photo, key, fillBtn));
+        actions.appendChild(fillBtn);
       }
 
       const target2 = OUTPUT_MODES[exportMode][key][0];
-      if (!crop.aiExtended){
+      if (!crop.filled){
         if (crop.enhanced){
           const revertBtn = document.createElement('button');
           revertBtn.className = 'mini-btn ai-btn done';
@@ -723,75 +717,53 @@ function enhanceCrop(photo, key, btnEl){
   });
 }
 
-// ---- generative fill (AI outpaint) ----
-async function extendCropWithAI(photo, key, btnEl){
+// ---- smart fill: blurred/zoomed backdrop of the same photo, no AI, no network ----
+function fillCropFrame(photo, key, btnEl){
   const crop = photo.crops[key];
   const originalLabel = btnEl.textContent;
-  btnEl.textContent = 'Generando...';
   btnEl.disabled = true;
+  btnEl.textContent = 'Generando...';
 
   try {
-    const WORK_MAX = 1280;
-    const scale = Math.min(1, WORK_MAX / Math.max(crop.cropW, crop.cropH));
-    const boxW = Math.round(crop.cropW * scale);
-    const boxH = Math.round(crop.cropH * scale);
+    const [boxW, boxH] = OUTPUT_MODES[exportMode][key];
 
     const containScale = Math.min(boxW / photo.w, boxH / photo.h);
     const drawW = Math.max(1, Math.round(photo.w * containScale));
     const drawH = Math.max(1, Math.round(photo.h * containScale));
-    const marginX = Math.max(0, Math.round((boxW - drawW) / 2));
-    const marginY = Math.max(0, Math.round((boxH - drawH) / 2));
+    const marginX = Math.round((boxW - drawW) / 2);
+    const marginY = Math.round((boxH - drawH) / 2);
 
-    if (marginX === 0 && marginY === 0){
-      alert('Esta foto ya llena el marco — no hace falta extenderla con IA.');
+    if (marginX <= 0 && marginY <= 0){
+      alert('Esta foto ya llena el marco — no hace falta completarla.');
       btnEl.textContent = originalLabel;
       btnEl.disabled = false;
       return;
     }
 
-    const srcCanvas = document.createElement('canvas');
-    srcCanvas.width = drawW; srcCanvas.height = drawH;
-    srcCanvas.getContext('2d').drawImage(photo.canvas, 0, 0, drawW, drawH);
+    const fillCanvas = document.createElement('canvas');
+    fillCanvas.width = boxW; fillCanvas.height = boxH;
+    const fctx = fillCanvas.getContext('2d');
 
-    const blob = await new Promise(resolve => srcCanvas.toBlob(resolve, 'image/jpeg', 0.92));
-    const imageBase64 = await new Promise(resolve => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result);
-      reader.readAsDataURL(blob);
-    });
+    const coverScale = Math.max(boxW / photo.w, boxH / photo.h) * 1.15;
+    const bgW = photo.w * coverScale, bgH = photo.h * coverScale;
+    const bgX = (boxW - bgW) / 2, bgY = (boxH - bgH) / 2;
+    const blurPx = Math.max(1, Math.round(boxW * 0.025));
+    fctx.filter = `blur(${blurPx}px) brightness(0.82) saturate(1.05)`;
+    fctx.drawImage(photo.canvas, bgX, bgY, bgW, bgH);
+    fctx.filter = 'none';
 
-    const prompt = document.getElementById('aiPromptInput').value.trim();
+    fctx.fillStyle = 'rgba(0,0,0,0.12)';
+    fctx.fillRect(0, 0, boxW, boxH);
 
-    const response = await fetch('/api/outpaint', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        imageBase64,
-        left: marginX, right: marginX, up: marginY, down: marginY,
-        prompt
-      })
-    });
+    const fx = Math.round((boxW - drawW) / 2), fy = Math.round((boxH - drawH) / 2);
+    fctx.drawImage(photo.canvas, fx, fy, drawW, drawH);
 
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error || 'Error desconocido');
-
-    const resultImg = new Image();
-    await new Promise((resolve, reject) => {
-      resultImg.onload = resolve;
-      resultImg.onerror = () => reject(new Error('No se pudo cargar la imagen generada.'));
-      resultImg.src = data.image;
-    });
-
-    const aiCanvas = document.createElement('canvas');
-    aiCanvas.width = boxW; aiCanvas.height = boxH;
-    aiCanvas.getContext('2d').drawImage(resultImg, 0, 0, boxW, boxH);
-
-    crop.aiCanvas = aiCanvas;
-    crop.aiExtended = true;
+    crop.fillCanvas = fillCanvas;
+    crop.filled = true;
     renderGrid();
   } catch (err){
     console.error(err);
-    alert('No se pudo extender con IA: ' + (err && err.message ? err.message : 'error desconocido'));
+    alert('No se pudo completar el marco: ' + (err && err.message ? err.message : 'error desconocido'));
     btnEl.textContent = originalLabel;
     btnEl.disabled = false;
   }
