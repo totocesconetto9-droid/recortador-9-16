@@ -1,0 +1,7 @@
+{
+  "functions": {
+    "api/outpaint.js": {
+      "maxDuration": 60
+    }
+  }
+}

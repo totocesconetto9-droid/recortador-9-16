@@ -149,6 +149,12 @@
     background: rgba(20,10,50,0.75); color: var(--ink); font-size: 9px;
     padding: 2px 6px; border-radius: 3px; letter-spacing: .04em;
   }
+  .crop-canvas-wrap.ai-extended{ cursor: pointer; border-color: var(--violet); }
+  .crop-canvas-wrap.ai-extended::after{
+    content: "✨ IA"; position: absolute; top: 4px; right: 4px;
+    background: rgba(20,10,50,0.75); color: var(--ink); font-size: 9px;
+    padding: 2px 6px; border-radius: 3px; letter-spacing: .04em;
+  }
   .crop-actions{ display:flex; gap: 6px; flex-wrap: wrap; justify-content: center; }
   .mini-btn{
     background: transparent; border: 1px solid var(--line); color: var(--ink-dim);
@@ -234,12 +240,18 @@
         <button class="secondary" id="renameAllBtn">Aplicar</button>
       </div>
     </div>
+    <div class="toolbar-row">
+      <div class="toolbar-btns" style="flex:1;">
+        <span class="toolbar-label">✨ Prompt IA (opcional)</span>
+        <input type="text" id="aiPromptInput" placeholder="ej: playa con palmeras, cielo despejado" style="flex:1; min-width:220px;">
+      </div>
+    </div>
   </div>
 
   <div class="grid" id="grid"></div>
 
   <div class="hint">
-    El recorte arranca centrado; arrastrá dentro del marco para reposicionar, o hacé <b>click</b> (sin arrastrar) para ver una vista previa grande antes de descargar. Si un recorte no llega a la resolución elegida, aparece <b>🔍 Mejorar calidad</b> debajo — reescalado de alta calidad + nitidez, todo con canvas, sin modelos externos. Una vez aplicado, ese recorte queda fijo — "Revertir" lo vuelve a dejar editable.
+    El recorte arranca centrado; arrastrá dentro del marco para reposicionar, o hacé <b>click</b> (sin arrastrar) para ver una vista previa grande antes de descargar. Si un recorte no llega a la resolución elegida, aparece <b>🔍 Mejorar calidad</b> debajo — reescalado de alta calidad + nitidez, todo con canvas, sin modelos externos. Si la foto no llena el marco 9:16/4:5 sin recortar contenido, aparece <b>✨ Extender con IA</b> — en vez de cortar la imagen, genera contenido nuevo en los bordes para completar el marco (usa IA generativa real vía Stability AI). Una vez aplicado cualquiera de los dos, ese recorte queda fijo — "Revertir" / "Revertir IA" lo vuelve a dejar editable.
   </div>
 
 </div>
@@ -309,8 +321,15 @@ function computeCrop(w, h, targetRatio){
   return {
     cropW, cropH, slackX, slackY,
     offsetX: slackX / 2, offsetY: slackY / 2,
-    enhanced: false, enhancedCanvas: null
+    enhanced: false, enhancedCanvas: null,
+    aiExtended: false, aiCanvas: null
   };
+}
+
+function getCropSourceCanvas(crop){
+  if (crop.aiExtended && crop.aiCanvas) return crop.aiCanvas;
+  if (crop.enhanced && crop.enhancedCanvas) return crop.enhancedCanvas;
+  return null;
 }
 
 // ---- quality chips ----
@@ -465,7 +484,8 @@ function renderGrid(){
       label.textContent = LABELS[key];
 
       const wrap = document.createElement('div');
-      wrap.className = 'crop-canvas-wrap' + (crop.enhanced ? ' enhanced' : '');
+      wrap.className = 'crop-canvas-wrap'
+        + (crop.aiExtended ? ' ai-extended' : (crop.enhanced ? ' enhanced' : ''));
       const [pw, ph] = PREVIEW_SIZE[key];
       const canvas = document.createElement('canvas');
       canvas.width = pw; canvas.height = ph;
@@ -486,6 +506,7 @@ function renderGrid(){
       centerBtn.addEventListener('click', () => {
         const c = photo.crops[key];
         c.enhanced = false; c.enhancedCanvas = null;
+        c.aiExtended = false; c.aiCanvas = null;
         c.offsetX = c.slackX / 2; c.offsetY = c.slackY / 2;
         renderGrid();
       });
@@ -500,22 +521,41 @@ function renderGrid(){
       actions.appendChild(centerBtn);
       actions.appendChild(dlBtn);
 
-      const target2 = OUTPUT_MODES[exportMode][key][0];
-      if (crop.enhanced){
-        const revertBtn = document.createElement('button');
-        revertBtn.className = 'mini-btn ai-btn done';
-        revertBtn.textContent = '↺ Revertir';
-        revertBtn.addEventListener('click', () => {
-          crop.enhanced = false; crop.enhancedCanvas = null;
+      if (crop.aiExtended){
+        const revertAiBtn = document.createElement('button');
+        revertAiBtn.className = 'mini-btn ai-btn done';
+        revertAiBtn.textContent = '↺ Revertir IA';
+        revertAiBtn.addEventListener('click', () => {
+          crop.aiExtended = false; crop.aiCanvas = null;
           renderGrid();
         });
-        actions.appendChild(revertBtn);
-      } else if (crop.cropW < target2){
-        const enhanceBtn = document.createElement('button');
-        enhanceBtn.className = 'mini-btn ai-btn';
-        enhanceBtn.textContent = '🔍 Mejorar calidad';
-        enhanceBtn.addEventListener('click', () => enhanceCrop(photo, key, enhanceBtn));
-        actions.appendChild(enhanceBtn);
+        actions.appendChild(revertAiBtn);
+      } else {
+        const aiExtendBtn = document.createElement('button');
+        aiExtendBtn.className = 'mini-btn ai-btn';
+        aiExtendBtn.textContent = '✨ Extender con IA';
+        aiExtendBtn.addEventListener('click', () => extendCropWithAI(photo, key, aiExtendBtn));
+        actions.appendChild(aiExtendBtn);
+      }
+
+      const target2 = OUTPUT_MODES[exportMode][key][0];
+      if (!crop.aiExtended){
+        if (crop.enhanced){
+          const revertBtn = document.createElement('button');
+          revertBtn.className = 'mini-btn ai-btn done';
+          revertBtn.textContent = '↺ Revertir';
+          revertBtn.addEventListener('click', () => {
+            crop.enhanced = false; crop.enhancedCanvas = null;
+            renderGrid();
+          });
+          actions.appendChild(revertBtn);
+        } else if (crop.cropW < target2){
+          const enhanceBtn = document.createElement('button');
+          enhanceBtn.className = 'mini-btn ai-btn';
+          enhanceBtn.textContent = '🔍 Mejorar calidad';
+          enhanceBtn.addEventListener('click', () => enhanceCrop(photo, key, enhanceBtn));
+          actions.appendChild(enhanceBtn);
+        }
       }
 
       block.appendChild(label);
@@ -537,8 +577,9 @@ function drawCropPreview(photo, key){
   ctx.clearRect(0, 0, w, h);
   ctx.save();
   ctx.filter = EFFECTS[photo.effect].filter;
-  if (crop.enhanced && crop.enhancedCanvas){
-    ctx.drawImage(crop.enhancedCanvas, 0, 0, w, h);
+  const source = getCropSourceCanvas(crop);
+  if (source){
+    ctx.drawImage(source, 0, 0, w, h);
   } else {
     ctx.drawImage(photo.canvas, crop.offsetX, crop.offsetY, crop.cropW, crop.cropH, 0, 0, w, h);
   }
@@ -600,8 +641,9 @@ function openPreviewModal(photo, key){
   canvas.width = w; canvas.height = h;
   const ctx = canvas.getContext('2d');
   ctx.filter = EFFECTS[photo.effect].filter;
-  if (crop.enhanced && crop.enhancedCanvas){
-    ctx.drawImage(crop.enhancedCanvas, 0, 0, w, h);
+  const modalSource = getCropSourceCanvas(crop);
+  if (modalSource){
+    ctx.drawImage(modalSource, 0, 0, w, h);
   } else {
     ctx.drawImage(photo.canvas, crop.offsetX, crop.offsetY, crop.cropW, crop.cropH, 0, 0, w, h);
   }
@@ -681,6 +723,80 @@ function enhanceCrop(photo, key, btnEl){
   });
 }
 
+// ---- generative fill (AI outpaint) ----
+async function extendCropWithAI(photo, key, btnEl){
+  const crop = photo.crops[key];
+  const originalLabel = btnEl.textContent;
+  btnEl.textContent = 'Generando...';
+  btnEl.disabled = true;
+
+  try {
+    const WORK_MAX = 1280;
+    const scale = Math.min(1, WORK_MAX / Math.max(crop.cropW, crop.cropH));
+    const boxW = Math.round(crop.cropW * scale);
+    const boxH = Math.round(crop.cropH * scale);
+
+    const containScale = Math.min(boxW / photo.w, boxH / photo.h);
+    const drawW = Math.max(1, Math.round(photo.w * containScale));
+    const drawH = Math.max(1, Math.round(photo.h * containScale));
+    const marginX = Math.max(0, Math.round((boxW - drawW) / 2));
+    const marginY = Math.max(0, Math.round((boxH - drawH) / 2));
+
+    if (marginX === 0 && marginY === 0){
+      alert('Esta foto ya llena el marco — no hace falta extenderla con IA.');
+      btnEl.textContent = originalLabel;
+      btnEl.disabled = false;
+      return;
+    }
+
+    const srcCanvas = document.createElement('canvas');
+    srcCanvas.width = drawW; srcCanvas.height = drawH;
+    srcCanvas.getContext('2d').drawImage(photo.canvas, 0, 0, drawW, drawH);
+
+    const blob = await new Promise(resolve => srcCanvas.toBlob(resolve, 'image/jpeg', 0.92));
+    const imageBase64 = await new Promise(resolve => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.readAsDataURL(blob);
+    });
+
+    const prompt = document.getElementById('aiPromptInput').value.trim();
+
+    const response = await fetch('/api/outpaint', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        imageBase64,
+        left: marginX, right: marginX, up: marginY, down: marginY,
+        prompt
+      })
+    });
+
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Error desconocido');
+
+    const resultImg = new Image();
+    await new Promise((resolve, reject) => {
+      resultImg.onload = resolve;
+      resultImg.onerror = () => reject(new Error('No se pudo cargar la imagen generada.'));
+      resultImg.src = data.image;
+    });
+
+    const aiCanvas = document.createElement('canvas');
+    aiCanvas.width = boxW; aiCanvas.height = boxH;
+    aiCanvas.getContext('2d').drawImage(resultImg, 0, 0, boxW, boxH);
+
+    crop.aiCanvas = aiCanvas;
+    crop.aiExtended = true;
+    renderGrid();
+  } catch (err){
+    console.error(err);
+    alert('No se pudo extender con IA: ' + (err && err.message ? err.message : 'error desconocido'));
+    btnEl.textContent = originalLabel;
+    btnEl.disabled = false;
+  }
+}
+
 // ---- export ----
 function sanitizeName(name){
   return (name || 'foto').trim().replace(/[\\/:*?"<>|]/g, '-').replace(/\s+/g, '_') || 'foto';
@@ -693,8 +809,9 @@ function exportCropBlob(photo, key, callback){
   out.width = ow; out.height = oh;
   const octx = out.getContext('2d');
   octx.filter = EFFECTS[photo.effect].filter;
-  if (crop.enhanced && crop.enhancedCanvas){
-    octx.drawImage(crop.enhancedCanvas, 0, 0, crop.enhancedCanvas.width, crop.enhancedCanvas.height, 0, 0, ow, oh);
+  const exportSource = getCropSourceCanvas(crop);
+  if (exportSource){
+    octx.drawImage(exportSource, 0, 0, exportSource.width, exportSource.height, 0, 0, ow, oh);
   } else {
     octx.drawImage(photo.canvas, crop.offsetX, crop.offsetY, crop.cropW, crop.cropH, 0, 0, ow, oh);
   }
